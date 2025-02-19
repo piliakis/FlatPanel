@@ -1,7 +1,9 @@
-#include "indi_defaultdevice.h"
+#include "defaultdevice.h"
 #include <cstring>
 #include <termios.h>
 #include <glob.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 class FlatPanelCover : public INDI::DefaultDevice
 {
@@ -9,7 +11,7 @@ public:
     FlatPanelCover();
     virtual ~FlatPanelCover();
 
-    const char *getDefaultName() override; // Define default name
+    const char *getDefaultName() override;
 
 protected:
     virtual bool initProperties() override;
@@ -24,16 +26,16 @@ private:
     bool findArduinoPort();
     bool sendCommand(const char *cmd);
     bool readResponse(char *response, int maxLength);
-    int serialFD;
+    int serialFD = -1;
     std::string serialPort;
 
-    INDI::PropertySwitch CoverControl;
+    ISwitchVectorProperty CoverControl;
     ISwitch CoverOptions[2];
 
-    INDI::PropertyNumber BrightnessControl;
+    INumberVectorProperty BrightnessControl;
     INumber BrightnessValue[1];
 
-    INDI::PropertyText StatusFeedback;
+    ITextVectorProperty StatusFeedback;
     IText StatusMessages[1];
 };
 
@@ -43,7 +45,7 @@ FlatPanelCover::FlatPanelCover()
     setVersion(1, 1);
 }
 
-// Set default name and vendor
+// Set device name
 const char *FlatPanelCover::getDefaultName()
 {
     return "PrometheusAstro Flat Panel Cover";
@@ -59,34 +61,15 @@ bool FlatPanelCover::initProperties()
 {
     INDI::DefaultDevice::initProperties();
 
-    setDeviceName("PrometheusAstro Flat Panel Cover");
+    IUFillSwitch(&CoverOptions[0], "OPEN", "Open Cover", ISS_OFF);
+    IUFillSwitch(&CoverOptions[1], "CLOSE", "Close Cover", ISS_OFF);
+    IUFillSwitchVector(&CoverControl, CoverOptions, 2, getDeviceName(), "Cover Control", "", MAIN_CONTROL_TAB, IP_RW, ISR_1OFMANY, 0, IPS_IDLE);
 
-    CoverOptions[0].name = "OPEN";
-    CoverOptions[1].name = "CLOSE";
-    CoverOptions[0].label = "Open Cover";
-    CoverOptions[1].label = "Close Cover";
-    CoverOptions[0].s = ISS_OFF;
-    CoverOptions[1].s = ISS_OFF;
+    IUFillNumber(&BrightnessValue[0], "BRIGHTNESS", "Brightness Level", "%0.f", 0, 4095, 1, 0);
+    IUFillNumberVector(&BrightnessControl, BrightnessValue, 1, getDeviceName(), "Brightness Control", "", MAIN_CONTROL_TAB, IP_RW, 0, IPS_IDLE);
 
-    CoverControl.initSwitch("Cover Control", "Open/Close Flat Panel Cover", MAIN_CONTROL_TAB, CoverOptions, 2, IP_RW, ISR_1OFMANY);
-    defineSwitch(&CoverControl);
-
-    BrightnessValue[0].name = "BRIGHTNESS";
-    BrightnessValue[0].label = "Brightness Level";
-    BrightnessValue[0].min = 0;
-    BrightnessValue[0].max = 4095;
-    BrightnessValue[0].step = 1;
-    BrightnessValue[0].value = 0;
-
-    BrightnessControl.initNumber("Brightness Control", "Set LED Brightness", MAIN_CONTROL_TAB, BrightnessValue, 1, IP_RW, 60);
-    defineNumber(&BrightnessControl);
-
-    StatusMessages[0].name = "STATUS";
-    StatusMessages[0].label = "Device Status";
-    strcpy(StatusMessages[0].text, "Disconnected");
-
-    StatusFeedback.initText("Device Status", "Real-time Status", MAIN_CONTROL_TAB, StatusMessages, 1, IP_RO);
-    defineText(&StatusFeedback);
+    IUFillText(&StatusMessages[0], "STATUS", "Device Status", "Disconnected");
+    IUFillTextVector(&StatusFeedback, StatusMessages, 1, getDeviceName(), "Device Status", "", MAIN_CONTROL_TAB, IP_RO, 0, IPS_IDLE);
 
     return true;
 }
@@ -95,9 +78,9 @@ bool FlatPanelCover::updateProperties()
 {
     if (isConnected())
     {
-        defineSwitch(&CoverControl);
-        defineNumber(&BrightnessControl);
-        defineText(&StatusFeedback);
+        defineProperty(&CoverControl);
+        defineProperty(&BrightnessControl);
+        defineProperty(&StatusFeedback);
     }
     else
     {
@@ -173,26 +156,26 @@ void FlatPanelCover::TimerHit()
         {
             CoverOptions[0].s = ISS_ON;
             CoverOptions[1].s = ISS_OFF;
-            strcpy(StatusMessages[0].text, "Cover Open");
+            IUSaveText(&StatusMessages[0], "Cover Open");
         }
         else if (strstr(response, "STATE CLOSED"))
         {
             CoverOptions[0].s = ISS_OFF;
             CoverOptions[1].s = ISS_ON;
-            strcpy(StatusMessages[0].text, "Cover Closed");
+            IUSaveText(&StatusMessages[0], "Cover Closed");
         }
         else if (strstr(response, "STATE MOVING"))
         {
-            strcpy(StatusMessages[0].text, "Cover Moving...");
+            IUSaveText(&StatusMessages[0], "Cover Moving...");
         }
         else if (strstr(response, "BRIGHTNESS"))
         {
             BrightnessValue[0].value = atoi(response + 11);
         }
 
-        CoverControl.update();
-        BrightnessControl.update();
-        StatusFeedback.update();
+        IDSetSwitch(&CoverControl, nullptr);
+        IDSetNumber(&BrightnessControl, nullptr);
+        IDSetText(&StatusFeedback, nullptr);
     }
 
     SetTimer(1000);
@@ -214,7 +197,7 @@ bool FlatPanelCover::ISNewSwitch(const char *dev, const char *name, ISState *sta
             sendCommand("CLOSE");
         }
 
-        CoverControl.update();
+        IDSetSwitch(&CoverControl, nullptr);
         return true;
     }
 
@@ -237,7 +220,7 @@ bool FlatPanelCover::ISNewNumber(const char *dev, const char *name, double value
         sendCommand(command);
 
         BrightnessValue[0].value = brightness;
-        BrightnessControl.update();
+        IDSetNumber(&BrightnessControl, nullptr);
         return true;
     }
 
